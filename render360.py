@@ -36,33 +36,6 @@ def lookAt(center, target, up):
 
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
-
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh):
-	render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "video")
-	video_output = os.path.join(render_path, "output.mp4")
-
-	makedirs(render_path, exist_ok=True)
-
-	out = cv2.VideoWriter(video_output, cv2.VideoWriter_fourcc(*'mp4v'), 30, (5328, 4608))
-
-	for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-		rendering = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
-
-		if args.train_test_exp:
-			rendering = rendering[..., rendering.shape[-1] // 2:]
-			gt = gt[..., gt.shape[-1] // 2:]
-
-		np_img = to8b(rendering).transpose(1, 2, 0)
-		cv2_img = cv2.cvtColor(np_img, cv2.COLOR_RGB2BGR)
-
-		out.write(cv2_img)
-
-	out.release()
-	cv2.destroyAllWindows()
-	#os.system(f"ffmpeg -f image2 -r 30 -i {os.path.join(render_path, '%05d.png')} -filter_complex \"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2\" -pix_fmt yuv420p -y {video_output}")
-
-
-
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, separate_sh: bool):
 	with torch.no_grad():
 		gaussians = GaussianModel(dataset.sh_degree)
@@ -83,7 +56,6 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 		FoVx = cams[0].FoVx
 		FoVy = cams[0].FoVy
 		depth_params = None
-		#image = Image.open("/data/student_kaempchen/ed3dgs-data/vci/stefan_sample/colmap/images/C0000.jpg")
 		image = Image.new("RGB", (1, 1))
 		invdepthmap = None
 		image_name = cams[0].image_name
@@ -114,8 +86,6 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 			view = Camera(resolution=resolution, colmap_id=colmap_id, R=R, T=T, FoVx=FoVx, FoVy=FoVy, depth_params=depth_params, image=image, invdepthmap=invdepthmap, image_name=image_name, uid=uid, data_device=data_device, train_test_exp=train_test_exp, is_test_dataset=is_test_dataset, is_test_view=is_test_view)
 
 			rendering = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
-			
-			# torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(i) + ".png"))
 
 			np_img = to8b(rendering).transpose(1, 2, 0)
 			cv2_img = cv2.cvtColor(np_img, cv2.COLOR_RGB2BGR)
@@ -124,8 +94,6 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
 		out.release()
 		cv2.destroyAllWindows()
-
-		#render_set(dataset.model_path, "test", scene.loaded_iter, test_cams, gaussians, pipeline, background, dataset.train_test_exp, separate_sh)
 
 if __name__ == "__main__":
 	# Set up command line argument parser
