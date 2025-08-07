@@ -36,17 +36,17 @@ def lookAt(center, target, up):
 
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, separate_sh: bool, output: str):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, separate_sh: bool, output_dir: str, output_name: str):
 	with torch.no_grad():
 		gaussians = GaussianModel(dataset.sh_degree)
 		scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
 
-		if output == "":
-			render_path = os.path.join(dataset.model_path, "test", "ours_{}".format(scene.loaded_iter), "video")
+		if output_dir == "" or output_name == "":
+			render_path = os.path.join(dataset.model_path, "test", "ours_{}".format(scene.loaded_iter))
 			video_output = os.path.join(render_path, "output.mp4")
 		else:
-			render_path = os.path.dirname(output)
-			video_output = output
+			render_path = os.path.join(output_dir, "test", "ours_{}".format(scene.loaded_iter))
+			video_output = os.path.join(render_path, output_name)
 
 		makedirs(render_path, exist_ok=True)
 
@@ -106,8 +106,9 @@ if __name__ == "__main__":
 	pipeline = PipelineParams(parser)
 	parser.add_argument("--iteration", default=-1, type=int)
 	parser.add_argument("--quiet", action="store_true")
-	parser.add_argument("--output", default="", type=str, required=False)
+	parser.add_argument("--output_dir", default="", type=str, required=False)
+	parser.add_argument("--output_name", default="", type=str, required=False)
 	args = get_combined_args(parser)
 	print("Rendering " + args.model_path)
 
-	render_sets(model.extract(args), args.iteration, pipeline.extract(args), SPARSE_ADAM_AVAILABLE, args.output)
+	render_sets(model.extract(args), args.iteration, pipeline.extract(args), SPARSE_ADAM_AVAILABLE, args.output_dir, args.output_name)
