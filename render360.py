@@ -45,7 +45,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 			render_path = os.path.join(dataset.model_path, "test", "ours_{}".format(scene.loaded_iter), "video")
 			video_output = os.path.join(render_path, "output.mp4")
 		else:
-			render_path = os.dirname(output)
+			render_path = os.path.dirname(output)
 			video_output = output
 
 		makedirs(render_path, exist_ok=True)
