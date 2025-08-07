@@ -36,12 +36,16 @@ def lookAt(center, target, up):
 
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, separate_sh: bool):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, separate_sh: bool, output: str):
 	with torch.no_grad():
 		gaussians = GaussianModel(dataset.sh_degree)
 		scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
 
-		render_path = os.path.join(dataset.model_path, "test", "ours_{}".format(scene.loaded_iter), "video")
+		if output == "":
+			render_path = os.path.join(dataset.model_path, "test", "ours_{}".format(scene.loaded_iter), "video")
+		else:
+			render_path = output
+
 		video_output = os.path.join(render_path, "output.mp4")
 
 		makedirs(render_path, exist_ok=True)
@@ -67,7 +71,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 		center = np.column_stack([-c.R @ c.T for c in cams]).sum(axis=1) / len(cams)
 		n = 360
 		angles = np.radians(np.linspace(0, 360, n))
-		distance = 4
+		distance = 75
 		
 		out = cv2.VideoWriter(video_output, cv2.VideoWriter_fourcc(*'mp4v'), 30, resolution)
 
@@ -101,10 +105,9 @@ if __name__ == "__main__":
 	model = ModelParams(parser, sentinel=True)
 	pipeline = PipelineParams(parser)
 	parser.add_argument("--iteration", default=-1, type=int)
-	parser.add_argument("--skip_train", action="store_true")
-	parser.add_argument("--skip_test", action="store_true")
 	parser.add_argument("--quiet", action="store_true")
+	parser.add_argument("--output", default="", type=str, required=False)
 	args = get_combined_args(parser)
 	print("Rendering " + args.model_path)
 
-	render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, SPARSE_ADAM_AVAILABLE)
+	render_sets(model.extract(args), args.iteration, pipeline.extract(args), SPARSE_ADAM_AVAILABLE, args.output)
