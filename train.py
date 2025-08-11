@@ -10,6 +10,7 @@
 #
 
 import os
+import json
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
@@ -67,6 +68,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     viewpoint_indices = list(range(len(viewpoint_stack)))
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
+
+    loss_list = []
+    points_list = []
+    psnr_list = []
+    ssim_list = []
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -149,13 +155,32 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
 
+            loss_list.append(loss.item())
+            points_list.append(scene.gaussians.get_xyz.shape[0])
+
+            # Evaluate test performance
+            if (iteration in testing_iterations):
+                psnr_test = 0
+                ssim_test = 0
+
+                for viewpoint in scene.getTestCameras():
+                    image = torch.clamp(render(viewpoint, scene.gaussians, pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp)["render"], 0.0, 1.0)
+                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+
+                    psnr_test += psnr(image, gt_image).mean().double().item()
+                    ssim_test += ssim(image, gt_image).mean().double().item()
+
+                psnr_list.append(psnr_test / len(scene.getTestCameras()))
+                ssim_list.append(ssim_test / len(scene.getTestCameras()))
+
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
+            # TODO: skip normal logging for now
+            # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -189,7 +214,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
-def prepare_output_and_logger(args):    
+    train_results = {
+        "loss": loss_list,
+        "points": points_list,
+        "psnr": {
+            "iteration": testing_iterations,
+            "value": psnr_list
+        },
+        "ssim": {
+            "iteration": testing_iterations,
+            "value": ssim_list
+        }
+    }
+
+    json_object = json.dumps(train_results, indent=None)
+
+    with open(os.path.join(args.model_path, "train_results.json"), "w") as outfile:
+        outfile.write(json_object)
+
+def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
@@ -261,7 +304,7 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=list(range(500, 30_001, 500)))
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
