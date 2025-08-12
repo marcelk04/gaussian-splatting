@@ -14,6 +14,7 @@ import json
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
+from lpipsPyTorch.modules.lpips import LPIPS
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -41,7 +42,7 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams, testing_iterations: list[int], saving_iterations: list[int], checkpoint_iterations: list[int], checkpoint: str, debug_from: int) -> None:
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
@@ -56,7 +57,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gaussians.restore(model_params, opt)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
-    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    background = torch.tensor(bg_color, dtype=torch.float32, device=dataset.data_device)
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
@@ -73,6 +74,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     points_list = []
     psnr_list = []
     ssim_list = []
+    lpips_list = []
+
+    lpips_net = LPIPS(net_type="vgg").to(dataset.data_device)
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -112,17 +116,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if (iteration - 1) == debug_from:
             pipe.debug = True
 
-        bg = torch.rand((3), device="cuda") if opt.random_background else background
+        bg = torch.rand((3), device=dataset.data_device) if opt.random_background else background
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         if viewpoint_cam.alpha_mask is not None:
-            alpha_mask = viewpoint_cam.alpha_mask.cuda()
+            alpha_mask = viewpoint_cam.alpha_mask.to(dataset.data_device)
             image *= alpha_mask
 
         # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
+        gt_image = viewpoint_cam.original_image.to(dataset.data_device)
         Ll1 = l1_loss(image, gt_image)
         if FUSED_SSIM_AVAILABLE:
             ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
@@ -135,8 +139,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1depth_pure = 0.0
         if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
             invDepth = render_pkg["depth"]
-            mono_invdepth = viewpoint_cam.invdepthmap.cuda()
-            depth_mask = viewpoint_cam.depth_mask.cuda()
+            mono_invdepth = viewpoint_cam.invdepthmap.to(dataset.data_device)
+            depth_mask = viewpoint_cam.depth_mask.to(dataset.data_device)
 
             Ll1depth_pure = torch.abs((invDepth  - mono_invdepth) * depth_mask).mean()
             Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure 
@@ -165,18 +169,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Evaluate test performance
             if (iteration in testing_iterations):
-                psnr_test = 0
-                ssim_test = 0
+                psnr_test = 0.0
+                ssim_test = 0.0
+                lpips_test = 0.0
 
                 for viewpoint in scene.getTestCameras():
                     image = torch.clamp(render(viewpoint, scene.gaussians, pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp)["render"], 0.0, 1.0)
-                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                    gt_image = torch.clamp(viewpoint.original_image.to(dataset.data_device), 0.0, 1.0)
 
                     psnr_test += psnr(image, gt_image).mean().double().item()
                     ssim_test += ssim(image, gt_image).mean().double().item()
+                    lpips_test += lpips_net(image, gt_image).mean().double().item()
 
                 psnr_list.append(psnr_test / len(scene.getTestCameras()))
                 ssim_list.append(ssim_test / len(scene.getTestCameras()))
+                lpips_list.append(lpips_test / len(scene.getTestCameras()))
 
             # Log and save
             # TODO: skip normal logging for now
@@ -224,6 +231,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         "ssim": {
             "iteration": testing_iterations,
             "value": ssim_list
+        },
+        "lpips": {
+            "iteration": testing_iterations,
+            "value": lpips_list
         }
     }
 
