@@ -285,17 +285,14 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
                 torch.save((gaussians2.capture(), iteration), scene2.model_path + "/chkpnt" + str(iteration) + ".pth")
 
     # Save evaluated metrics on test views
-    json_object = json.dumps(train_results_model1, indent=None)
     with open(os.path.join(dataset1.model_path, "train_results.json"), "w") as outfile:
-        outfile.write(json_object)
-        
-    json_object = json.dumps(train_results_model2, indent=None)
+        json.dump(train_results_model1, outfile, indent=None)
+
     with open(os.path.join(dataset2.model_path, "train_results.json"), "w") as outfile:
-        outfile.write(json_object)
-        
-    json_object = json.dumps(train_results_model_combined, indent=None)
+        json.dump(train_results_model2, outfile, indent=None)
+
     with open(os.path.join(dataset1.model_path, "train_results_combined.json"), "w") as outfile:
-        outfile.write(json_object)
+        json.dump(train_results_model_combined, outfile, indent=None)
 
 def prepare_output_and_logger(args):
     if not args.model_path:
