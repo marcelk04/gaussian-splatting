@@ -100,7 +100,7 @@ def evaluate_performance(results_obj, scene, dataset, pipe, background, lpips_ne
 
         psnr_test += psnr(image, gt_image).mean().double().item()
         ssim_test += ssim(image, gt_image).mean().double().item()
-        lpips_test += lpips_net(image, gt_image).mean().double().item()
+        lpips_test += lpips_net(image*2-1, gt_image*2-1).mean().double().item()
 
     results_obj["psnr"]["value"].append(psnr_test / len(scene.getTestCameras()))
     results_obj["ssim"]["value"].append(ssim_test / len(scene.getTestCameras()))
@@ -265,7 +265,7 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
 
                     psnr_test += psnr(render_combined, gt_combined).mean().double().item()
                     ssim_test += ssim(render_combined, gt_combined).mean().double().item()
-                    lpips_test += lpips_net(render_combined, gt_combined).mean().double().item()
+                    lpips_test += lpips_net(render_combined*2-1, gt_combined*2-1).mean().double().item()
 
                 train_results_model_combined["psnr"]["value"].append(psnr_test / len(scene1.getTestCameras()))
                 train_results_model_combined["ssim"]["value"].append(ssim_test / len(scene1.getTestCameras()))

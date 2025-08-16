@@ -179,7 +179,7 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
 
                     psnr_test += psnr(image, gt_image).mean().double().item()
                     ssim_test += ssim(image, gt_image).mean().double().item()
-                    lpips_test += lpips_net(image, gt_image).mean().double().item()
+                    lpips_test += lpips_net(image*2-1, gt_image*2-1).mean().double().item()
 
                 psnr_list.append(psnr_test / len(scene.getTestCameras()))
                 ssim_list.append(ssim_test / len(scene.getTestCameras()))
