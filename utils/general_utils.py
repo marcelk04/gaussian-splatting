@@ -14,6 +14,9 @@ import sys
 from datetime import datetime
 import numpy as np
 import random
+from utils.image_utils import psnr
+from utils.loss_utils import ssim
+from lpipsPyTorch.modules.lpips import LPIPS
 
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
@@ -131,3 +134,20 @@ def safe_state(silent):
     np.random.seed(0)
     torch.manual_seed(0)
     torch.cuda.set_device(torch.device("cuda:0"))
+
+def eval_performance(renders, gts, lpips_net=None, device="cuda"):
+    if type(lpips_net) == type(None):
+        lpips_net = LPIPS(net_type="vgg").to(device)
+
+    N = len(renders)
+
+    psnr_val = 0.0
+    ssim_val = 0.0
+    lpips_val = 0.0
+
+    for render_img, gt_img in zip(renders, gts):
+        psnr_val += psnr(render_img, gt_img).mean().item()
+        ssim_val += ssim(render_img, gt_img).mean().item()
+        lpips_val += lpips_net(render_img*2-1, gt_img*2-1).mean().item()
+
+    return psnr_val / N, ssim_val / N, lpips_val / N

@@ -224,15 +224,15 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
     train_results = {
         "loss": loss_list,
         "points": points_list,
-        "psnr": {
+        "PSNR": {
             "iteration": testing_iterations,
             "value": psnr_list
         },
-        "ssim": {
+        "SSIM": {
             "iteration": testing_iterations,
             "value": ssim_list
         },
-        "lpips": {
+        "LPIPS": {
             "iteration": testing_iterations,
             "value": lpips_list
         }
