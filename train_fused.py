@@ -19,7 +19,7 @@ from utils.loss_utils import l1_loss, ssim
 from lpipsPyTorch.modules.lpips import LPIPS
 from gaussian_renderer import render, network_gui
 import sys
-from scene import Scene, GaussianModel
+from scene import Scene, GaussianModel, SeparatedScene
 from scene.cameras import Camera
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
@@ -45,13 +45,13 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
 
-def create_viewpoint_stack(scene: Scene) -> tuple[list[Camera], list[int]]:
-    viewpoint_stack = scene.getTrainCameras().copy()
+def create_viewpoint_stack(cameras: list[Camera]) -> tuple[list[Camera], list[int]]:
+    viewpoint_stack = cameras.copy()
     viewpoint_indices = list(range(len(viewpoint_stack)))
     return viewpoint_stack, viewpoint_indices
 
-def render_viewpoint(viewpoint_cam: Camera, gaussians: GaussianModel, pipe: PipelineParams, bg, dataset: ModelParams):
-    render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
+def render_viewpoint(viewpoint_cam: Camera, gaussians: GaussianModel, pipe: PipelineParams, bg, dataset: ModelParams, shs_idx=None):
+    render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, shs_idx=shs_idx)
     return render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
 def calculate_loss(gt_image, rendered_image, opt: OptimizationParams):
@@ -89,22 +89,23 @@ def gaussian_optimization(gaussians: GaussianModel, scene: Scene, iteration: int
             gaussians.optimizer.step()
             gaussians.optimizer.zero_grad(set_to_none = True)
 
-def evaluate_performance(results_obj, scene, dataset, pipe, background, lpips_net):
+def evaluate_performance(results_obj, gaussians, test_cams, dataset, pipe, background, lpips_net, shs_idx=0):
     psnr_test = 0.0
     ssim_test = 0.0
     lpips_test = 0.0
 
-    for viewpoint in scene.getTestCameras():
-        image = torch.clamp(render(viewpoint, scene.gaussians, pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp)["render"], 0.0, 1.0)
+    for viewpoint in test_cams:
+        image, _, _, _ = render_viewpoint(viewpoint, gaussians, pipe, background, dataset, shs_idx=shs_idx)
+        # image = torch.clamp(render(viewpoint, gaussians, pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp)["render"], 0.0, 1.0)
         gt_image = torch.clamp(viewpoint.original_image.to(dataset.data_device), 0.0, 1.0)
 
         psnr_test += psnr(image, gt_image).mean().double().item()
         ssim_test += ssim(image, gt_image).mean().double().item()
         lpips_test += lpips_net(image*2-1, gt_image*2-1).mean().double().item()
 
-    results_obj["psnr"]["value"].append(psnr_test / len(scene.getTestCameras()))
-    results_obj["ssim"]["value"].append(ssim_test / len(scene.getTestCameras()))
-    results_obj["lpips"]["value"].append(lpips_test / len(scene.getTestCameras()))
+    results_obj["psnr"]["value"].append(psnr_test / len(test_cams))
+    results_obj["ssim"]["value"].append(ssim_test / len(test_cams))
+    results_obj["lpips"]["value"].append(lpips_test / len(test_cams))
 
 def combine_images(img1, img2):
     return torch.clamp((img1 ** 2.2) + (img2 ** 2.2), 0.0, 1.0) ** (1.0 / 2.2)
@@ -119,13 +120,9 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
     _ = prepare_output_and_logger(dataset2)
 
     # Initialize separate GaussianModels and Scenes
-    gaussians1 = GaussianModel(dataset1.sh_degree, opt.optimizer_type)
-    scene1 = Scene(dataset1, gaussians1, shuffle=False)
-    gaussians1.training_setup(opt)
-    
-    gaussians2 = GaussianModel(dataset2.sh_degree, opt.optimizer_type)
-    scene2 = Scene(dataset2, gaussians2, shuffle=False)
-    gaussians2.training_setup(opt)
+    gaussians = GaussianModel(dataset1.sh_degree, opt.optimizer_type, two_shs=True)
+    scene = SeparatedScene(dataset1, dataset2, gaussians, shuffle=False)
+    gaussians.training_setup(opt)
 
     # if checkpoint:
     #     (model_params, first_iter) = torch.load(checkpoint)
@@ -143,8 +140,8 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
     use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE 
     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=opt.iterations)
 
-    viewpoint_stack1, viewpoint_indices1 = create_viewpoint_stack(scene1)
-    viewpoint_stack2, viewpoint_indices2 = create_viewpoint_stack(scene2)
+    viewpoint_stack1, viewpoint_indices1 = create_viewpoint_stack(scene.getTrainCameras1())
+    viewpoint_stack2, viewpoint_indices2 = create_viewpoint_stack(scene.getTrainCameras2())
 
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
@@ -177,17 +174,15 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
 
-        gaussians1.update_learning_rate(iteration)
-        gaussians2.update_learning_rate(iteration)
+        gaussians.update_learning_rate(iteration)
 
         if iteration % 1000 == 0:
-            gaussians1.oneupSHdegree()
-            gaussians2.oneupSHdegree()
+            gaussians.oneupSHdegree()
 
         # Pick a random Camera
         if not viewpoint_stack1 or not viewpoint_stack2:
-            viewpoint_stack1, viewpoint_indices1 = create_viewpoint_stack(scene1)
-            viewpoint_stack2, viewpoint_indices2 = create_viewpoint_stack(scene2)
+            viewpoint_stack1, viewpoint_indices1 = create_viewpoint_stack(scene.getTrainCameras1())
+            viewpoint_stack2, viewpoint_indices2 = create_viewpoint_stack(scene.getTrainCameras2())
 
         rand_idx = randint(0, len(viewpoint_indices1) - 1)
         viewpoint_cam1 = viewpoint_stack1.pop(rand_idx)
@@ -202,8 +197,8 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
         bg1 = torch.rand((3), device=dataset1.data_device) if opt.random_background else background1
         bg2 = torch.rand((3), device=dataset1.data_device) if opt.random_background else background2
 
-        image1, viewspace_point_tensor1, visibility_filter1, radii1 = render_viewpoint(viewpoint_cam1, gaussians1, pipe, bg1, dataset1)
-        image2, viewspace_point_tensor2, visibility_filter2, radii2 = render_viewpoint(viewpoint_cam2, gaussians2, pipe, bg2, dataset2)
+        image1, viewspace_point_tensor1, visibility_filter1, radii1 = render_viewpoint(viewpoint_cam1, gaussians, pipe, bg1, dataset1, shs_idx=0)
+        image2, viewspace_point_tensor2, visibility_filter2, radii2 = render_viewpoint(viewpoint_cam2, gaussians, pipe, bg2, dataset2, shs_idx=1)
 
         # Loss
         gt_image1 = viewpoint_cam1.original_image.to(dataset1.data_device)
@@ -221,8 +216,27 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
         total_loss.backward()
 
         with torch.no_grad():
-            gaussian_optimization(gaussians1, scene1, iteration, dataset1, opt, viewspace_point_tensor1, visibility_filter1, radii1, use_sparse_adam)
-            gaussian_optimization(gaussians2, scene2, iteration, dataset2, opt, viewspace_point_tensor2, visibility_filter2, radii2, use_sparse_adam)
+            # Densification
+            if iteration < opt.densify_until_iter:
+                # Keep track of max radii in image-space for pruning
+                gaussians.max_radii2D[visibility_filter1] = torch.max(gaussians.max_radii2D[visibility_filter1], radii1[visibility_filter1])
+                gaussians.add_densification_stats(viewspace_point_tensor1, visibility_filter1)
+                gaussians.max_radii2D[visibility_filter2] = torch.max(gaussians.max_radii2D[visibility_filter2], radii2[visibility_filter2])
+                gaussians.add_densification_stats(viewspace_point_tensor2, visibility_filter2)
+
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii1)
+                
+                if iteration % opt.opacity_reset_interval == 0 or (dataset1.white_background and iteration == opt.densify_from_iter):
+                    gaussians.reset_opacity()
+
+            # Optimizer step
+            if iteration < opt.iterations:
+                gaussians.exposure_optimizer.step()
+                gaussians.exposure_optimizer.zero_grad(set_to_none = True)
+                gaussians.optimizer.step()
+                gaussians.optimizer.zero_grad(set_to_none = True)
 
         iter_end.record()
 
@@ -241,26 +255,29 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
             train_results_model2["loss"].append(loss2.item())
             train_results_model_combined["loss"].append(total_loss.item())
 
-            train_results_model1["points"].append(scene1.gaussians.get_xyz.shape[0])
-            train_results_model2["points"].append(scene2.gaussians.get_xyz.shape[0])
-            train_results_model_combined["points"].append(scene1.gaussians.get_xyz.shape[0] + scene2.gaussians.get_xyz.shape[0])
+            train_results_model1["points"].append(scene.gaussians.get_xyz.shape[0])
+            train_results_model2["points"].append(scene.gaussians.get_xyz.shape[0])
+            train_results_model_combined["points"].append(scene.gaussians.get_xyz.shape[0])
 
             # Evaluate test performance
             if (iteration in testing_iterations):
-                evaluate_performance(train_results_model1, scene1, dataset1, pipe, background1, lpips_net)
-                evaluate_performance(train_results_model2, scene2, dataset2, pipe, background2, lpips_net)
+                evaluate_performance(train_results_model1, gaussians, scene.getTestCameras1(), dataset1, pipe, background1, lpips_net, shs_idx=0)
+                evaluate_performance(train_results_model2, gaussians, scene.getTestCameras2(), dataset2, pipe, background2, lpips_net, shs_idx=1)
 
                 # Evaluate combined performance
                 psnr_test = 0.0
                 ssim_test = 0.0
                 lpips_test = 0.0
 
-                for i in range(len(scene1.getTestCameras())):
-                    viewpoint1 = scene1.getTestCameras()[i]
-                    viewpoint2 = scene2.getTestCameras()[i]
+                for i in range(len(scene.getTestCameras1())):
+                    viewpoint1 = scene.getTestCameras1()[i]
+                    viewpoint2 = scene.getTestCameras2()[i]
 
-                    image1 = render(viewpoint1, scene1.gaussians, pipe, background1, 1., SPARSE_ADAM_AVAILABLE, None, dataset1.train_test_exp)["render"]
-                    image2 = render(viewpoint2, scene2.gaussians, pipe, background2, 1., SPARSE_ADAM_AVAILABLE, None, dataset2.train_test_exp)["render"]
+                    image1, _, _, _ = render_viewpoint(viewpoint1, gaussians, pipe, bg1, dataset1, shs_idx=0)
+                    image2, _, _, _ = render_viewpoint(viewpoint2, gaussians, pipe, bg2, dataset2, shs_idx=1)
+
+                    # image1 = render(viewpoint1, gaussians, pipe, background1, 1., SPARSE_ADAM_AVAILABLE, None, dataset1.train_test_exp, shs_idx=0)["render"]
+                    # image2 = render(viewpoint2, gaussians, pipe, background2, 1., SPARSE_ADAM_AVAILABLE, None, dataset2.train_test_exp, shs_idx=1)["render"]
                     render_combined = combine_images(image1, image2)
 
                     gt_image1 = viewpoint1.original_image.to(dataset1.data_device)
@@ -271,28 +288,32 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
                     ssim_test += ssim(render_combined, gt_combined).mean().double().item()
                     lpips_test += lpips_net(render_combined*2-1, gt_combined*2-1).mean().double().item()
 
-                train_results_model_combined["psnr"]["value"].append(psnr_test / len(scene1.getTestCameras()))
-                train_results_model_combined["ssim"]["value"].append(ssim_test / len(scene1.getTestCameras()))
-                train_results_model_combined["lpips"]["value"].append(lpips_test / len(scene1.getTestCameras()))
+                train_results_model_combined["psnr"]["value"].append(psnr_test / len(scene.getTestCameras1()))
+                train_results_model_combined["ssim"]["value"].append(ssim_test / len(scene.getTestCameras1()))
+                train_results_model_combined["lpips"]["value"].append(lpips_test / len(scene.getTestCameras1()))
 
             # Log and save
             # TODO: skip normal logging for now
             # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene1.save(iteration)
-                scene2.save(iteration)
+                scene.save(iteration)
+
+                # cam = scene.getTrainCameras2()[33]
+                
+                # image1, viewspace_point_tensor1, visibility_filter1, radii1 = render_viewpoint(cam, gaussians, pipe, bg2, dataset2, shs_idx=1)
+                # torchvision.utils.save_image(image1, os.path.join(dataset1.model_path, "why2.png"))
+                # print("wtf")
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians1.capture(), iteration), scene1.model_path + "/chkpnt" + str(iteration) + ".pth")
-                torch.save((gaussians2.capture(), iteration), scene2.model_path + "/chkpnt" + str(iteration) + ".pth")
+                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
     # Save evaluated metrics on test views
-    with open(os.path.join(dataset1.model_path, "train_results.json"), "w") as outfile:
+    with open(os.path.join(dataset1.model_path, "train_results1.json"), "w") as outfile:
         json.dump(train_results_model1, outfile, indent=None)
 
-    with open(os.path.join(dataset2.model_path, "train_results.json"), "w") as outfile:
+    with open(os.path.join(dataset2.model_path, "train_results2.json"), "w") as outfile:
         json.dump(train_results_model2, outfile, indent=None)
 
     with open(os.path.join(dataset1.model_path, "train_results_combined.json"), "w") as outfile:
@@ -378,8 +399,6 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--source1", type=str, required=True)
     parser.add_argument("--source2", type=str, required=True)
-    parser.add_argument("--model1", type=str, required=True)
-    parser.add_argument("--model2", type=str, required=True)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     
@@ -397,11 +416,9 @@ if __name__ == "__main__":
     dataset2 = copy.deepcopy(dataset1)
 
     dataset1.source_path = os.path.abspath(args.source1)
-    dataset1.model_path = os.path.abspath(args.model1)
     dataset1.white_background = False
 
     dataset2.source_path = os.path.abspath(args.source2)
-    dataset2.model_path = os.path.abspath(args.model2)
     dataset2.white_background = False
 
     training(dataset1, dataset2, op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)

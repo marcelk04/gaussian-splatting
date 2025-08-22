@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False, shs_idx=0):
     """
     Render the scene. 
     
@@ -82,7 +82,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             if separate_sh:
                 dc, shs = pc.get_features_dc, pc.get_features_rest
             else:
-                shs = pc.get_features
+                if not pc.two_shs or shs_idx == 0:
+                    shs = pc.get_features
+                else:
+                    shs = pc.get_features_2
     else:
         colors_precomp = override_color
 

@@ -36,7 +36,7 @@ def lookAt(center, target, up):
 
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, separate_sh: bool, output: str):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, separate_sh: bool, output: str, shs_idx=0):
 	with torch.no_grad():
 		gaussians = GaussianModel(dataset.sh_degree)
 		scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -89,7 +89,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
 			view = Camera(resolution=resolution, colmap_id=colmap_id, R=R, T=T, FoVx=FoVx, FoVy=FoVy, depth_params=depth_params, image=image, invdepthmap=invdepthmap, image_name=image_name, uid=uid, data_device=data_device, train_test_exp=train_test_exp, is_test_dataset=is_test_dataset, is_test_view=is_test_view)
 
-			rendering = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
+			rendering = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh, shs_idx=shs_idx)["render"]
 
 			np_img = to8b(rendering).transpose(1, 2, 0)
 			cv2_img = cv2.cvtColor(np_img, cv2.COLOR_RGB2BGR)
@@ -107,7 +107,8 @@ if __name__ == "__main__":
 	parser.add_argument("--iteration", default=-1, type=int)
 	parser.add_argument("--quiet", action="store_true")
 	parser.add_argument("--output", default="", type=str, required=False)
+	parser.add_argument("--shs_idx", default=0, type=int, required=False)
 	args = get_combined_args(parser)
 	print("Rendering " + args.model_path)
 
-	render_sets(model.extract(args), args.iteration, pipeline.extract(args), SPARSE_ADAM_AVAILABLE, args.output)
+	render_sets(model.extract(args), args.iteration, pipeline.extract(args), SPARSE_ADAM_AVAILABLE, args.output, args.shs_idx)
