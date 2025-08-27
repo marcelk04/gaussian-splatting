@@ -102,9 +102,9 @@ def evaluate_performance(results_obj, scene, dataset, pipe, background, lpips_ne
         ssim_test += ssim(image, gt_image).mean().double().item()
         lpips_test += lpips_net(image*2-1, gt_image*2-1).mean().double().item()
 
-    results_obj["psnr"]["value"].append(psnr_test / len(scene.getTestCameras()))
-    results_obj["ssim"]["value"].append(ssim_test / len(scene.getTestCameras()))
-    results_obj["lpips"]["value"].append(lpips_test / len(scene.getTestCameras()))
+    results_obj["PSNR"]["value"].append(psnr_test / len(scene.getTestCameras()))
+    results_obj["SSIM"]["value"].append(ssim_test / len(scene.getTestCameras()))
+    results_obj["LPIPS"]["value"].append(lpips_test / len(scene.getTestCameras()))
 
 def combine_images(img1, img2):
     return torch.clamp((img1 ** 2.2) + (img2 ** 2.2), 0.0, 1.0) ** (1.0 / 2.2)
@@ -152,15 +152,15 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
     train_results_obj = {
         "loss": [],
         "points": [],
-        "psnr": {
+        "PSNR": {
             "iteration": testing_iterations,
             "value": []
         },
-        "ssim": {
+        "SSIM": {
             "iteration": testing_iterations,
             "value": []
         },
-        "lpips": {
+        "LPIPS": {
             "iteration": testing_iterations,
             "value": []
         }
@@ -271,9 +271,9 @@ def training(dataset1: ModelParams, dataset2: ModelParams, opt: OptimizationPara
                     ssim_test += ssim(render_combined, gt_combined).mean().double().item()
                     lpips_test += lpips_net(render_combined*2-1, gt_combined*2-1).mean().double().item()
 
-                train_results_model_combined["psnr"]["value"].append(psnr_test / len(scene1.getTestCameras()))
-                train_results_model_combined["ssim"]["value"].append(ssim_test / len(scene1.getTestCameras()))
-                train_results_model_combined["lpips"]["value"].append(lpips_test / len(scene1.getTestCameras()))
+                train_results_model_combined["PSNR"]["value"].append(psnr_test / len(scene1.getTestCameras()))
+                train_results_model_combined["SSIM"]["value"].append(ssim_test / len(scene1.getTestCameras()))
+                train_results_model_combined["LPIPS"]["value"].append(lpips_test / len(scene1.getTestCameras()))
 
             # Log and save
             # TODO: skip normal logging for now

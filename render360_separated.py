@@ -64,7 +64,7 @@ def render_sets(dataset1 : ModelParams, dataset2 : ModelParams, iteration : int,
 		image = Image.new("RGB", (1, 1))
 		invdepthmap = None
 		image_name = cams[0].image_name
-		data_device= "cuda"
+		data_device= dataset1.data_device
 		train_test_exp = False
 		is_test_dataset = False
 		is_test_view = False
